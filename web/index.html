@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#0d0f1a" />
+    <title>pchat</title>
+    <link rel="icon" href="/static/favicon.svg" />
+    <link rel="stylesheet" href="/static/style.css" />
+    <script type="module" src="/static/app.js"></script>
+  </head>
+  <body>
+    <div class="backdrop" aria-hidden="true"><span></span><span></span><span></span></div>
+
+    <main id="landing" class="landing">
+      <header class="hero">
+        <img class="logo" src="/static/favicon.svg" alt="" width="56" height="56" />
+        <h1>pchat</h1>
+        <p class="tagline">Private rooms that vanish. End-to-end encrypted chat, voice and video.</p>
+        <ul class="features">
+          <li><span data-icon="lock"></span>End-to-end encrypted</li>
+          <li><span data-icon="clock"></span>Self-destructing</li>
+          <li><span data-icon="video"></span>Voice &amp; video</li>
+        </ul>
+      </header>
+
+      <p id="insecure" class="banner" hidden>
+        This page must be opened over HTTPS (or on localhost). Browsers disable the encryption APIs on insecure pages.
+      </p>
+
+      <div class="panel">
+        <div class="tabs" role="tablist" data-active="create">
+          <span class="tab-indicator" aria-hidden="true"></span>
+          <button type="button" role="tab" data-tab="create">New chat</button>
+          <button type="button" role="tab" data-tab="join">Join chat</button>
+        </div>
+
+        <form id="create-form" class="form" autocomplete="off" novalidate>
+          <div class="field">
+            <label for="create-room">Room ID</label>
+            <div class="input-group">
+              <input id="create-room" name="room" spellcheck="false" placeholder="a UUID, or something like my-topic" maxlength="128" />
+              <button type="button" class="ghost" id="gen-room" title="Generate a random UUID"><span data-icon="refresh"></span>UUID</button>
+            </div>
+            <div class="meter" id="room-meter"><span class="bar"></span><span class="hint"></span></div>
+          </div>
+
+          <div class="field">
+            <label for="create-pin">PIN</label>
+            <div class="input-group">
+              <input id="create-pin" name="pin" type="password" spellcheck="false" placeholder="Anything you like" maxlength="256" />
+              <button type="button" class="ghost icon-only reveal" data-target="create-pin" title="Show / hide" data-icon="eye"></button>
+              <button type="button" class="ghost" id="gen-pin" title="Generate a random PIN"><span data-icon="refresh"></span>Random</button>
+            </div>
+            <div class="meter" id="pin-meter"><span class="bar"></span><span class="hint"></span></div>
+          </div>
+
+          <div class="field">
+            <label for="create-nick">Nickname</label>
+            <input id="create-nick" name="nick" maxlength="32" placeholder="How others will see you" />
+          </div>
+
+          <fieldset class="modes">
+            <legend>History</legend>
+            <label class="mode">
+              <input type="radio" name="mode" value="private" checked />
+              <span class="mode-icon" data-icon="zap"></span>
+              <span><b>Private</b><small>RAM only. Gone when the timer ends, the room is destroyed, or the server restarts.</small></span>
+            </label>
+            <label class="mode">
+              <input type="radio" name="mode" value="logged" />
+              <span class="mode-icon" data-icon="database"></span>
+              <span><b>Logged</b><small>Encrypted history is kept on the server until the room is destroyed.</small></span>
+            </label>
+          </fieldset>
+
+          <div class="field" id="ttl-field">
+            <label for="create-ttl">Self-destruct after</label>
+            <select id="create-ttl" name="ttl">
+              <option value="15">15 minutes</option>
+              <option value="60">1 hour</option>
+              <option value="360">6 hours</option>
+              <option value="720" selected>12 hours</option>
+              <option value="1440">24 hours</option>
+              <option value="4320">3 days</option>
+              <option value="10080">7 days</option>
+            </select>
+          </div>
+          <div class="field" id="inactive-field" hidden>
+            <label for="create-inactive">Auto-delete when idle for</label>
+            <select id="create-inactive" name="inactive">
+              <option value="0" selected>Never (destroy manually)</option>
+              <option value="7">7 days</option>
+              <option value="30">30 days</option>
+              <option value="90">90 days</option>
+              <option value="365">1 year</option>
+            </select>
+          </div>
+
+          <button type="submit" class="primary"><span class="label">Create chat</span></button>
+          <p class="error" role="alert"></p>
+        </form>
+
+        <form id="join-form" class="form" autocomplete="off" novalidate hidden>
+          <div class="field">
+            <label for="join-room">Room ID</label>
+            <input id="join-room" name="room" spellcheck="false" placeholder="The ID from the link" maxlength="128" />
+          </div>
+          <div class="field">
+            <label for="join-pin">PIN</label>
+            <div class="input-group">
+              <input id="join-pin" name="pin" type="password" spellcheck="false" maxlength="256" />
+              <button type="button" class="ghost icon-only reveal" data-target="join-pin" title="Show / hide" data-icon="eye"></button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="join-nick">Nickname</label>
+            <input id="join-nick" name="nick" maxlength="32" placeholder="How others will see you" />
+          </div>
+          <button type="submit" class="primary"><span class="label">Join chat</span></button>
+          <p class="error" role="alert"></p>
+        </form>
+      </div>
+
+      <footer>
+        <span data-icon="shield"></span>
+        Messages, nicknames and call setup are encrypted in your browser with a key derived from the room ID and PIN.
+        The server only relays ciphertext and never sees the PIN.
+      </footer>
+    </main>
+
+    <section id="room" class="room" hidden>
+      <header class="room-bar">
+        <span class="room-avatar" id="room-avatar" aria-hidden="true"></span>
+        <div class="room-info">
+          <div class="room-name" id="room-name"></div>
+          <div class="room-meta">
+            <span id="mode-badge" class="badge"></span>
+            <span id="countdown" class="countdown"></span>
+          </div>
+        </div>
+        <div class="actions">
+          <button type="button" class="icon-btn call-start" id="call-audio" title="Start voice call" aria-label="Start voice call" data-icon="phone"></button>
+          <button type="button" class="icon-btn call-start" id="call-video" title="Start video call" aria-label="Start video call" data-icon="video"></button>
+          <button type="button" class="icon-btn" id="menu-btn" title="More" aria-label="Room menu" aria-haspopup="menu" aria-expanded="false" data-icon="more"></button>
+          <button type="button" class="icon-btn" id="leave" title="Leave room" aria-label="Leave room" data-icon="log-out"></button>
+        </div>
+        <div class="menu-backdrop" id="menu-backdrop" hidden></div>
+        <div class="menu" id="room-menu" role="menu" hidden>
+          <button type="button" role="menuitem" class="live-only" id="copy-link"><span data-icon="link"></span>Copy link</button>
+          <button type="button" role="menuitem" class="live-only" id="persist-open"><span data-icon="save"></span><span>Keep history<small>Save messages &amp; files (encrypted)</small></span></button>
+          <button type="button" role="menuitem" id="sound-toggle"><span class="sound-icon" data-icon="bell"></span><span class="sound-label">Sounds on</span></button>
+          <button type="button" role="menuitem" class="danger live-only" id="destroy"><span data-icon="trash"></span>Destroy room</button>
+        </div>
+      </header>
+
+      <div class="members" id="members"></div>
+
+      <div class="call-banner" id="call-banner" hidden>
+        <span class="pulse" aria-hidden="true"></span>
+        <span class="call-banner-text" id="call-banner-text"></span>
+        <button type="button" class="pill" id="banner-audio"><span data-icon="phone"></span>Join</button>
+        <button type="button" class="pill" id="banner-video"><span data-icon="video"></span>With video</button>
+      </div>
+
+      <div class="stage" id="stage" hidden>
+        <div class="tiles" id="tiles"></div>
+        <div class="call-controls">
+          <button type="button" class="round" id="ctl-mic" aria-label="Microphone" data-icon="mic"></button>
+          <button type="button" class="round" id="ctl-cam" aria-label="Camera" data-icon="video-off"></button>
+          <button type="button" class="round" id="ctl-screen" title="Share screen" aria-label="Share screen" data-icon="monitor"></button>
+          <button type="button" class="round" id="ctl-expand" title="Expand / shrink" aria-label="Expand" data-icon="maximize"></button>
+          <button type="button" class="round hangup" id="ctl-hangup" title="Leave call" aria-label="Leave call" data-icon="phone-off"></button>
+        </div>
+      </div>
+
+      <ol class="messages" id="messages" aria-live="polite"></ol>
+      <div class="typing" id="typing" aria-live="polite"></div>
+
+      <form id="composer" class="composer">
+        <div class="composer-box">
+          <button type="button" class="icon-btn" id="attach-btn" title="Send files or photos" aria-label="Attach files" data-icon="paperclip"></button>
+          <input type="file" id="file-input" multiple hidden />
+          <button type="button" class="icon-btn" id="emoji-btn" title="Emoji" aria-label="Emoji" data-icon="smile"></button>
+          <textarea name="text" rows="1" placeholder="Message…" maxlength="4000" aria-label="Message"></textarea>
+          <button type="submit" class="send" title="Send (Enter)" aria-label="Send" data-icon="send"></button>
+        </div>
+      </form>
+    </section>
+
+    <div class="drop-overlay" id="drop-overlay" hidden>
+      <div><span data-icon="paperclip"></span>Drop to send. Files are encrypted before upload.</div>
+    </div>
+
+    <div class="modal" id="persist-modal" role="dialog" aria-modal="true" aria-labelledby="persist-title" hidden>
+      <div class="modal-card">
+        <div class="modal-icon" data-icon="save"></div>
+        <h2 id="persist-title">Keep this chat's history?</h2>
+        <p>
+          The room becomes <b>Logged</b>. Messages and files from now on, and everything still in memory, are stored
+          encrypted on the server. The self-destruct timer stops. Everyone in the room is notified, and this can't be
+          switched back. The room can still be destroyed at any time.
+        </p>
+        <label for="persist-inactive">Auto-delete when idle for</label>
+        <select id="persist-inactive">
+          <option value="0" selected>Never (destroy manually)</option>
+          <option value="7">7 days</option>
+          <option value="30">30 days</option>
+          <option value="90">90 days</option>
+          <option value="365">1 year</option>
+        </select>
+        <div class="modal-actions">
+          <button type="button" id="persist-cancel">Cancel</button>
+          <button type="button" class="primary" id="persist-confirm">Keep history</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-label="Image viewer" hidden>
+      <div class="viewer-bar">
+        <span class="viewer-name" id="viewer-name"></span>
+        <button type="button" class="icon-btn" id="viewer-download" title="Download" aria-label="Download" data-icon="download"></button>
+        <button type="button" class="icon-btn" id="viewer-close" title="Close" aria-label="Close" data-icon="x"></button>
+      </div>
+      <div class="viewer-body" id="viewer-body">
+        <img id="viewer-img" alt="" />
+        <div class="viewer-progress" id="viewer-progress"><span></span></div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>

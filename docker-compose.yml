@@ -1,0 +1,75 @@
+services:
+  pchat:
+    build: .
+    image: pchat:local
+    container_name: pchat
+    restart: unless-stopped
+    ports:
+      # Your reverse proxy (TLS) forwards to HOST_IP:PCHAT_PORT.
+      - "${PCHAT_PORT:-8085}:8080"
+    environment:
+      TRUST_PROXY: "1"
+      ALLOWED_ORIGINS: "https://${PCHAT_DOMAIN:?set PCHAT_DOMAIN in .env}"
+      STUN_URLS: "stun:${PCHAT_DOMAIN}:3478"
+      TURN_URLS: "turn:${PCHAT_DOMAIN}:3478?transport=udp,turn:${PCHAT_DOMAIN}:3478?transport=tcp"
+      TURN_SECRET: "${TURN_SECRET:?set TURN_SECRET in .env}"
+    volumes:
+      # Only logged rooms (ciphertext) are written here. Private rooms live in RAM.
+      - pchat-data:/data
+      # Limits for shared files (RAM for private rooms, disk for logged ones).
+      - ./config:/app/config:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  # TURN/STUN relay for calls when two browsers can't connect directly (mobile data,
+  # strict NATs). Media stays DTLS-SRTP encrypted end to end; coturn only forwards packets.
+  # Router: forward UDP+TCP 3478 and UDP 49160-49260 to HOST_IP, and allow them in the host firewall.
+  coturn:
+    image: coturn/coturn:4.6
+    container_name: pchat-coturn
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --log-file=stdout
+      - --listening-ip=${HOST_IP:?set HOST_IP in .env}
+      - --listening-port=3478
+      - --relay-ip=${HOST_IP}
+      # Public IP is looked up at container start; restart coturn if it changes.
+      - --external-ip=$$(detect-external-ip --ipv4)/${HOST_IP}
+      - --min-port=49160
+      - --max-port=49260
+      - --realm=${PCHAT_DOMAIN}
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_SECRET:?set TURN_SECRET in .env}
+      - --fingerprint
+      - --no-cli
+      - --no-tls
+      - --no-dtls
+      - --no-tcp-relay
+      - --no-multicast-peers
+      - --no-software-attribute
+      - --total-quota=60
+      - --user-quota=12
+      # Never let the relay be used to reach this LAN or other private networks.
+      - --denied-peer-ip=0.0.0.0-0.255.255.255
+      - --denied-peer-ip=10.0.0.0-10.255.255.255
+      - --denied-peer-ip=100.64.0.0-100.127.255.255
+      - --denied-peer-ip=127.0.0.0-127.255.255.255
+      - --denied-peer-ip=169.254.0.0-169.254.255.255
+      - --denied-peer-ip=172.16.0.0-172.31.255.255
+      - --denied-peer-ip=192.0.0.0-192.0.0.255
+      - --denied-peer-ip=192.168.0.0-192.168.255.255
+      - --denied-peer-ip=198.18.0.0-198.19.255.255
+      - --denied-peer-ip=::1
+      - --denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      - --denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      # ...except its own relay address, so two relayed browsers can reach each other.
+      - --allowed-peer-ip=${HOST_IP}
+
+volumes:
+  pchat-data:

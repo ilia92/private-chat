@@ -1,0 +1,19 @@
+// pchat settings. Restart the app after editing: docker compose restart pchat
+// Sizes are in megabytes (MiB). Whole-line // comments are allowed.
+{
+  // Private rooms: files live in server RAM only and vanish with the room.
+  "privateRooms": {
+    // Largest single file in a private room.
+    "maxFileMB": 10,
+    // Total files per private room.
+    "maxRoomFilesMB": 50,
+    // Total RAM for files across all private rooms together.
+    "maxTotalFilesMB": 512
+  },
+
+  // Logged rooms: encrypted files are stored on disk until the room is destroyed.
+  "loggedRooms": {
+    "maxFileMB": 100,
+    "maxRoomFilesMB": 1024
+  }
+}
