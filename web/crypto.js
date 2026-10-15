@@ -58,3 +58,47 @@ export async function decryptJSON(key, ref, blob) {
   );
   return JSON.parse(decoder.decode(plaintext));
 }
+
+// ---------- invite links ----------
+// The link is /i#<secret>. HKDF turns the secret into an AES key that seals the
+// room ID and PIN, and an id the server files the sealed bundle under. The
+// secret itself sits in the URL fragment, which browsers never send to the server.
+
+const INVITE_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
+
+const toBase64Url = (bytes) => toBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const fromBase64Url = (text) =>
+  fromBase64(text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4));
+
+export const isInviteSecret = (value) => INVITE_SECRET_RE.test(value);
+
+export function newInviteSecret() {
+  return toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+async function inviteMaterial(secret) {
+  const base = await crypto.subtle.importKey('raw', fromBase64Url(secret), 'HKDF', false, ['deriveBits']);
+  const bits = new Uint8Array(
+    await crypto.subtle.deriveBits(
+      { name: 'HKDF', hash: 'SHA-256', salt: encoder.encode('pchat/invite/v1'), info: new Uint8Array() },
+      base,
+      512,
+    ),
+  );
+  const key = await crypto.subtle.importKey('raw', bits.slice(0, 32), 'AES-GCM', false, ['encrypt', 'decrypt']);
+  return { key, id: toHex(bits.slice(32)) };
+}
+
+export async function inviteId(secret) {
+  return (await inviteMaterial(secret)).id;
+}
+
+export async function sealInvite(secret, value) {
+  const { key, id } = await inviteMaterial(secret);
+  return { id, data: await encryptJSON(key, id, value) };
+}
+
+export async function openInvite(secret, data) {
+  const { key, id } = await inviteMaterial(secret);
+  return decryptJSON(key, id, data);
+}

@@ -14,6 +14,10 @@ const DEFAULTS = {
     maxFileMB: 100,
     maxRoomFilesMB: 1024,
   },
+  invites: {
+    // Single-use join links stop working after this many minutes.
+    ttlMinutes: 5,
+  },
 };
 
 function positive(value, fallback, name) {
@@ -41,6 +45,7 @@ export function loadConfig(file) {
 
   const priv = raw.privateRooms ?? {};
   const logged = raw.loggedRooms ?? {};
+  const invites = raw.invites ?? {};
   const d = DEFAULTS;
   return {
     privateRooms: {
@@ -52,6 +57,9 @@ export function loadConfig(file) {
     loggedRooms: {
       maxFileBytes: positive(logged.maxFileMB, d.loggedRooms.maxFileMB, 'loggedRooms.maxFileMB') * MB,
       maxRoomBytes: positive(logged.maxRoomFilesMB, d.loggedRooms.maxRoomFilesMB, 'loggedRooms.maxRoomFilesMB') * MB,
+    },
+    invites: {
+      ttlMs: positive(invites.ttlMinutes, d.invites.ttlMinutes, 'invites.ttlMinutes') * 60_000,
     },
   };
 }

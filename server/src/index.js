@@ -24,6 +24,7 @@ const TURN_CREDENTIAL_TTL = 24 * 3600;
 const ROOM_PATH = /^\/[A-Za-z0-9._~-]{3,128}$/;
 const FILE_PATH = /^\/api\/files\/([0-9a-f]{64})\/([0-9a-f]{32})$/;
 const BEARER = /^Bearer ([0-9a-f]{64})$/;
+const INVITE_PATH = /^\/api\/invites\/([0-9a-f]{64})$/;
 const HOST = /^[A-Za-z0-9.-]+(:\d+)?$/;
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -141,6 +142,14 @@ async function handleFile(req, res, ref, id) {
 
 const server = http.createServer((req, res) => {
   const { pathname } = new URL(req.url, 'http://localhost');
+  const invite = INVITE_PATH.exec(pathname);
+  if (invite) {
+    // POST, so link-preview bots and prefetchers (which GET) can't use up an invite.
+    if (req.method !== 'POST') return respond(res, 405, {}, '');
+    req.resume();
+    const result = hub.redeemInvite(clientIp(req), invite[1]);
+    return respondJson(res, result.status ?? 200, result.error ? { error: result.error } : { data: result.data });
+  }
   const file = FILE_PATH.exec(pathname);
   if (file) {
     if (req.method !== 'GET' && req.method !== 'PUT') return respond(res, 405, {}, '');
@@ -157,7 +166,7 @@ const server = http.createServer((req, res) => {
   if (pathname.startsWith('/static/')) {
     const name = pathname.slice('/static/'.length);
     if (name !== 'index.html') asset = assets.get(name);
-  } else if (pathname === '/' || ROOM_PATH.test(pathname)) {
+  } else if (pathname === '/' || pathname === '/i' || ROOM_PATH.test(pathname)) {
     asset = indexPage;
   }
   if (!asset) return respond(res, 404, { 'Content-Type': 'text/plain' }, 'Not found');
@@ -252,6 +261,7 @@ server.listen(PORT, () =>
   console.log(
     `pchat listening on :${PORT} · private files ${mb(config.privateRooms.maxFileBytes)}/file, ` +
       `${mb(config.privateRooms.maxRoomBytes)}/room, ${mb(config.privateRooms.maxTotalBytes)} total RAM · ` +
-      `logged files ${mb(config.loggedRooms.maxFileBytes)}/file, ${mb(config.loggedRooms.maxRoomBytes)}/room`,
+      `logged files ${mb(config.loggedRooms.maxFileBytes)}/file, ${mb(config.loggedRooms.maxRoomBytes)}/room · ` +
+      `invites valid ${config.invites.ttlMs / 60_000} min`,
   ),
 );
