@@ -1,4 +1,14 @@
-import { deriveKeys, encryptJSON, decryptJSON } from './crypto.js';
+import {
+  decryptJSON,
+  deriveKeys,
+  encryptJSON,
+  inviteId,
+  isInviteSecret,
+  newInviteSecret,
+  openInvite,
+  sealInvite,
+} from './crypto.js';
+import qrcode from './qrcode.js';
 import { ROOM_RE, RESERVED, rate, randomPin } from './entropy.js';
 import { EmojiPicker, QUICK_REACTIONS, convertEmoticons, isJumboEmoji } from './emoji.js';
 import { hydrateIcons, setIcon } from './icons.js';
@@ -45,6 +55,9 @@ const ERRORS = {
   file_gone: 'This file is no longer available.',
   upload_failed: 'Upload failed.',
   download_failed: 'Download failed.',
+  invite_gone: 'This invite was already used or has expired. Ask for a new link.',
+  invite_broken: 'This invite link is incomplete or damaged. Ask for a new one.',
+  too_many_invites: 'Too many open invites for this room. Wait for some to expire.',
 };
 
 const END_REASONS = {
@@ -67,6 +80,9 @@ const input = composer.elements.text;
 const picker = new EmojiPicker();
 
 let session = null;
+// Invite being redeemed on the landing page: { secret, creds } (creds once opened).
+let pendingInvite = null;
+let inviteTimer = null;
 let unread = 0;
 let toastTimer = null;
 let soundOn = storageGet('localStorage', 'pchat-sound', '1') === '1';
@@ -280,19 +296,83 @@ async function enter(form, extra) {
   if (problem) return;
 
   unlockAudio();
-  setBusy(form, 'Deriving keys…');
   try {
-    const keys = await deriveKeys(roomId, pin);
-    const nickBlob = await encryptJSON(keys.encKey, keys.ref, nick);
-    const joinRequest = { t: 'join', room: keys.ref, auth: keys.auth, nick: nickBlob };
-    setBusy(form, 'Connecting…');
-    const { ws, joined } = await openSocket({ ...joinRequest, ...extra });
-    storageSet('localStorage', 'pchat-nick', nick);
+    await connectRoom(form, { roomId, pin, nick }, extra);
     fields.pin.value = '';
     updateMeters();
-    startSession({ roomId, keys, nick, joinRequest }, ws, joined);
   } catch (err) {
     showError(form, ERRORS[err.message] || ERRORS.connection);
+  } finally {
+    setBusy(form, null);
+  }
+}
+
+// Derives the room keys, opens the socket and enters the room. Throws an error
+// whose message is a server error code.
+async function connectRoom(form, { roomId, pin, nick }, extra) {
+  setBusy(form, 'Deriving keys…');
+  const keys = await deriveKeys(roomId, pin);
+  const nickBlob = await encryptJSON(keys.encKey, keys.ref, nick);
+  const joinRequest = { t: 'join', room: keys.ref, auth: keys.auth, nick: nickBlob };
+  setBusy(form, 'Connecting…');
+  const { ws, joined } = await openSocket({ ...joinRequest, ...extra });
+  storageSet('localStorage', 'pchat-nick', nick);
+  // The PIN stays in memory only, so members can create invite links.
+  startSession({ roomId, pin, keys, nick, joinRequest }, ws, joined);
+}
+
+// ---------- invite links: joining ----------
+
+function showInviteLanding(secret) {
+  pendingInvite = { secret, creds: null };
+  // Keep the secret out of the address bar and browser history.
+  history.replaceState(null, '', '/');
+  $('#main-panel').hidden = true;
+  $('#invite-card').hidden = false;
+  const form = $('#invite-form');
+  form.elements.nick.value = storageGet('localStorage', 'pchat-nick', '');
+  form.elements.nick.focus();
+}
+
+function hideInviteLanding() {
+  pendingInvite = null;
+  $('#invite-card').hidden = true;
+  $('#main-panel').hidden = false;
+}
+
+async function joinByInvite(event) {
+  event.preventDefault();
+  const form = $('#invite-form');
+  const nick = form.elements.nick.value.trim();
+  if (!nick) return showError(form, 'Enter a nickname.');
+  if (!pendingInvite) return;
+  showError(form, '');
+  unlockAudio();
+  try {
+    // Redeeming uses the invite up, so the credentials are kept for retries.
+    if (!pendingInvite.creds) {
+      setBusy(form, 'Opening invite…');
+      const res = await fetch(`/api/invites/${await inviteId(pendingInvite.secret)}`, { method: 'POST', cache: 'no-store' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'connection');
+      let creds;
+      try {
+        creds = await openInvite(pendingInvite.secret, body.data);
+      } catch {
+        throw new Error('invite_broken');
+      }
+      if (typeof creds?.r !== 'string' || !ROOM_RE.test(creds.r) || typeof creds.p !== 'string') throw new Error('invite_broken');
+      pendingInvite.creds = { roomId: creds.r, pin: creds.p };
+    }
+    await connectRoom(form, { ...pendingInvite.creds, nick }, {});
+    hideInviteLanding();
+  } catch (err) {
+    const code = ERRORS[err.message] ? err.message : 'connection';
+    showError(form, ERRORS[code]);
+    if (code === 'invite_gone' || code === 'invite_broken') {
+      form.querySelector('button[type=submit]').hidden = true;
+      $('#invite-home').hidden = false;
+    }
   } finally {
     setBusy(form, null);
   }
@@ -310,6 +390,8 @@ function startSession(base, ws, joined) {
     reactions: new Map(),
     typing: new Map(),
     iceWaiters: [],
+    inviteWaiters: new Map(),
+    invite: null,
     files: null,
     fileMeta: new Map(),
     blobUrls: new Map(),
@@ -360,6 +442,7 @@ function attach(s, ws, joined) {
   s.expiresAt = joined.expiresAt;
   s.inactiveDays = joined.inactiveDays;
   s.files = joined.files ?? null;
+  s.maxMembers = joined.maxMembers;
   renderStatus();
 
   enqueue(s, async () => {
@@ -369,7 +452,9 @@ function attach(s, ws, joined) {
     s.lastSender = null;
     s.lastDay = null;
     if (joined.created) {
-      addNotice('🔐 Room created. Copy the link and send it to the others, then send the PIN through a different channel.');
+      addNotice(
+        '🔐 Room created. Tap Invite for a one-time link or QR code, or share the room link and send the PIN through a different channel.',
+      );
     }
     const items = await Promise.all(joined.history.map((item) => decryptItem(s, item)));
     for (const item of items) addItem(s, item);
@@ -437,6 +522,17 @@ async function onServerMessage(s, msg) {
       addNotice(`💾 ${who} turned on history. Messages and files are now kept, encrypted, until the room is destroyed.`);
       break;
     }
+    case 'invite-ok':
+      s.inviteWaiters.get(msg.id)?.(msg);
+      s.inviteWaiters.delete(msg.id);
+      break;
+    case 'invite-used':
+      if (s.invite?.id === msg.id) {
+        s.invite.used = true;
+        tickInvite();
+      }
+      if (msg.by === s.me) addNotice('🎟️ Your invite link was just used.');
+      break;
     case 'ice':
       for (const resolve of s.iceWaiters.splice(0)) resolve(msg.servers);
       break;
@@ -534,6 +630,15 @@ function renderMembers(s) {
   });
   const count = el('span', 'member-count', `${s.members.length} online`);
   membersEl.replaceChildren(count, ...chips);
+  if (!s.ended && s.members.length < (s.maxMembers ?? 5)) {
+    const invite = el('button', 'chip invite-chip');
+    invite.type = 'button';
+    invite.dataset.inviteOpen = '';
+    const glyph = el('span');
+    glyph.dataset.icon = 'user-plus';
+    invite.append(glyph, 'Invite');
+    membersEl.append(invite);
+  }
   hydrateIcons(membersEl);
 }
 
@@ -705,7 +810,7 @@ function renderStatus() {
   glyph.dataset.icon = s.mode === 'private' ? 'zap' : 'database';
   badge.append(glyph, s.mode === 'private' ? 'Private · RAM only' : 'Logged · encrypted');
   hydrateIcons(badge);
-  $('#persist-open').hidden = s.mode !== 'private';
+  for (const button of document.querySelectorAll('.persist-action')) button.hidden = s.mode !== 'private';
   tick();
 }
 
@@ -759,21 +864,22 @@ async function reconnect(s) {
   }
 }
 
-// Cancels uploads and frees decrypted files kept in memory for this session.
-function releaseFiles(s) {
+// Cancels uploads, frees decrypted files kept in memory and closes any overlays.
+function cleanupSession(s) {
   for (const cancel of s.uploads) cancel();
   s.uploads.clear();
   for (const url of s.blobUrls.values()) URL.revokeObjectURL(url);
   s.blobUrls.clear();
   closeViewer();
   closeMenu();
+  closeInviteDialog();
   $('#persist-modal').hidden = true;
 }
 
 function end(s, reason, wipe) {
   if (s.ended) return;
   if (s.call) endCall(s, false);
-  releaseFiles(s);
+  cleanupSession(s);
   s.ended = true;
   s.ws?.close();
   if (wipe) messagesEl.replaceChildren();
@@ -789,7 +895,7 @@ function end(s, reason, wipe) {
 function leave() {
   const s = session;
   if (s?.call) endCall(s, true);
-  if (s) releaseFiles(s);
+  if (s) cleanupSession(s);
   session = null;
   if (s) {
     s.ended = true;
@@ -1053,6 +1159,112 @@ function closeMenu() {
   $('#menu-btn').setAttribute('aria-expanded', 'false');
 }
 
+// ---------- invite links: creating ----------
+
+// Draws the QR code as SVG elements; generated markup would trip the CSP.
+function renderQr(container, text) {
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  const count = qr.getModuleCount();
+  const margin = 2;
+  let path = '';
+  for (let row = 0; row < count; row++) {
+    for (let col = 0; col < count; col++) {
+      if (qr.isDark(row, col)) path += `M${col + margin} ${row + margin}h1v1h-1z`;
+    }
+  }
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${count + margin * 2} ${count + margin * 2}`);
+  svg.setAttribute('shape-rendering', 'crispEdges');
+  const background = document.createElementNS(NS, 'rect');
+  background.setAttribute('width', '100%');
+  background.setAttribute('height', '100%');
+  background.setAttribute('fill', '#fff');
+  const modules = document.createElementNS(NS, 'path');
+  modules.setAttribute('d', path);
+  modules.setAttribute('fill', '#0b0d17');
+  svg.append(background, modules);
+  container.replaceChildren(svg);
+}
+
+function requestInvite(s, id, data) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      s.inviteWaiters.delete(id);
+      resolve(null);
+    }, 5000);
+    s.inviteWaiters.set(id, (msg) => {
+      clearTimeout(timer);
+      resolve(msg);
+    });
+    s.ws.send(JSON.stringify({ t: 'invite', id, data }));
+  });
+}
+
+async function createInvite() {
+  const s = session;
+  if (!s || s.ended || s.ws?.readyState !== WebSocket.OPEN) return toast(ERRORS.connection);
+  clearInterval(inviteTimer);
+  s.invite = null;
+  $('#invite-qr').replaceChildren();
+  $('#invite-overlay').hidden = true;
+  $('#invite-link').value = '';
+  $('#invite-status').textContent = 'Creating a link…';
+  $('#invite-new').disabled = true;
+  try {
+    const secret = newInviteSecret();
+    const { id, data } = await sealInvite(secret, { r: s.roomId, p: s.pin });
+    const ok = await requestInvite(s, id, data);
+    if (session !== s) return;
+    if (!ok) {
+      $('#invite-status').textContent = 'Could not create a link. Try again.';
+      return;
+    }
+    const url = `${location.origin}/i#${secret}`;
+    s.invite = { id, url, expiresAt: ok.expiresAt, used: false };
+    $('#invite-link').value = url;
+    renderQr($('#invite-qr'), url);
+    tickInvite();
+    inviteTimer = setInterval(tickInvite, 1000);
+  } finally {
+    $('#invite-new').disabled = false;
+  }
+}
+
+function tickInvite() {
+  const invite = session?.invite;
+  if (!invite) return;
+  const status = $('#invite-status');
+  const overlay = $('#invite-overlay');
+  const left = invite.expiresAt - Date.now();
+  if (invite.used || left <= 0) {
+    clearInterval(inviteTimer);
+    overlay.hidden = false;
+    overlay.textContent = invite.used ? '✓ Used' : 'Expired';
+    status.textContent = invite.used
+      ? 'Used: they are joining now. Create a new link for someone else.'
+      : 'This link expired. Create a new one.';
+    status.className = `invite-status ${invite.used ? 'ok' : 'expired'}`;
+    return;
+  }
+  const seconds = Math.ceil(left / 1000);
+  status.textContent = `Valid for ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} · works once`;
+  status.className = `invite-status${seconds <= 30 ? ' urgent' : ''}`;
+}
+
+function openInviteDialog() {
+  if (!session || session.ended) return;
+  $('#invite-modal').hidden = false;
+  createInvite();
+}
+
+function closeInviteDialog() {
+  clearInterval(inviteTimer);
+  $('#invite-modal').hidden = true;
+}
+
 // ---------- calls ----------
 
 function requestIce(s) {
@@ -1242,10 +1454,43 @@ async function callAction(fn, { quietIfCancelled = false } = {}) {
 // ---------- wiring ----------
 
 function updateSoundButton() {
-  setIcon($('#sound-toggle .sound-icon'), soundOn ? 'bell' : 'bell-off');
-  $('#sound-toggle .sound-label').textContent = soundOn ? 'Sounds on' : 'Sounds off';
+  const label = soundOn ? 'Sounds on' : 'Sounds off';
+  for (const button of document.querySelectorAll('.sound-action')) {
+    setIcon(button.querySelector('.sound-icon'), soundOn ? 'bell' : 'bell-off');
+    const text = button.querySelector('.sound-label');
+    if (text) text.textContent = label;
+    else button.title = label;
+  }
   setSoundEnabled(soundOn);
 }
+
+// Room actions, shared by the top-bar icons (wide screens) and the ⋯ menu (phones).
+const ROOM_ACTIONS = {
+  invite: openInviteDialog,
+  copy() {
+    const url = `${location.origin}/${session.roomId}`;
+    navigator.clipboard.writeText(url).then(
+      () => toast('🔗 Link copied. Send the PIN through a different channel.'),
+      () => window.prompt('Copy this link:', url),
+    );
+  },
+  persist() {
+    if (session && !session.ended && session.mode === 'private') $('#persist-modal').hidden = false;
+  },
+  sound() {
+    soundOn = !soundOn;
+    storageSet('localStorage', 'pchat-sound', soundOn ? '1' : '0');
+    updateSoundButton();
+    if (soundOn) play('message');
+  },
+  destroy() {
+    const s = session;
+    if (!s || s.ended || s.ws?.readyState !== WebSocket.OPEN) return;
+    if (window.confirm('Destroy this room for everyone?\nAll messages are deleted permanently.')) {
+      s.ws.send(JSON.stringify({ t: 'destroy' }));
+    }
+  },
+};
 
 function init() {
   hydrateIcons();
@@ -1259,7 +1504,15 @@ function init() {
   joinForm.elements.nick.value = nick;
 
   const pathId = location.pathname.slice(1);
-  if (ROOM_RE.test(pathId) && !RESERVED.has(pathId)) {
+  if (location.pathname === '/i') {
+    const secret = location.hash.slice(1);
+    selectTab('join');
+    if (isInviteSecret(secret)) showInviteLanding(secret);
+    else {
+      history.replaceState(null, '', '/');
+      showError(joinForm, ERRORS.invite_broken);
+    }
+  } else if (ROOM_RE.test(pathId) && !RESERVED.has(pathId)) {
     joinForm.elements.room.value = pathId;
     createForm.elements.room.value = pathId;
     selectTab('join');
@@ -1390,12 +1643,39 @@ function init() {
     else downloadToDisk(s, file, $('#viewer-download'));
   });
 
+  // Invite links.
+  $('#invite-form').addEventListener('submit', joinByInvite);
+  $('#invite-home').addEventListener('click', () => {
+    hideInviteLanding();
+    selectTab('create');
+  });
+  membersEl.addEventListener('click', (event) => event.target.closest('[data-invite-open]') && openInviteDialog());
+  $('#invite-new').addEventListener('click', createInvite);
+  $('#invite-close').addEventListener('click', closeInviteDialog);
+  $('#invite-modal').addEventListener('click', (event) => event.target === event.currentTarget && closeInviteDialog());
+  $('#invite-copy').addEventListener('click', () => {
+    const url = session?.invite?.url;
+    if (!url) return;
+    navigator.clipboard.writeText(url).then(
+      () => toast('🎟️ Invite link copied. It works once, for a few minutes.'),
+      () => $('#invite-link').select(),
+    );
+  });
+  if (navigator.share) {
+    $('#invite-share').hidden = false;
+    $('#invite-share').addEventListener('click', () => {
+      const url = session?.invite?.url;
+      if (url) navigator.share({ title: 'pchat invite', text: 'Join my private chat (this link works once):', url }).catch(() => {});
+    });
+  }
+
   // Room menu and "keep history".
   $('#menu-btn').addEventListener('click', () => ($('#room-menu').hidden ? openMenu() : closeMenu()));
   $('#menu-backdrop').addEventListener('click', closeMenu);
   $('#room-menu').addEventListener('click', (event) => event.target.closest('button') && closeMenu());
-  $('#persist-open').addEventListener('click', () => {
-    if (session && !session.ended && session.mode === 'private') $('#persist-modal').hidden = false;
+  roomView.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-action]');
+    if (button && session) ROOM_ACTIONS[button.dataset.action]?.();
   });
   $('#persist-cancel').addEventListener('click', () => ($('#persist-modal').hidden = true));
   $('#persist-modal').addEventListener('click', (event) => {
@@ -1410,31 +1690,12 @@ function init() {
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     if (!$('#viewer').hidden) closeViewer();
+    else if (!$('#invite-modal').hidden) closeInviteDialog();
     else if (!$('#persist-modal').hidden) $('#persist-modal').hidden = true;
     else if (!$('#room-menu').hidden) closeMenu();
   });
 
-  $('#copy-link').addEventListener('click', () => {
-    const url = `${location.origin}/${session.roomId}`;
-    navigator.clipboard.writeText(url).then(
-      () => toast('🔗 Link copied. Send the PIN through a different channel.'),
-      () => window.prompt('Copy this link:', url),
-    );
-  });
-  $('#destroy').addEventListener('click', () => {
-    const s = session;
-    if (!s || s.ended || s.ws?.readyState !== WebSocket.OPEN) return;
-    if (window.confirm('Destroy this room for everyone?\nAll messages are deleted permanently.')) {
-      s.ws.send(JSON.stringify({ t: 'destroy' }));
-    }
-  });
   $('#leave').addEventListener('click', leave);
-  $('#sound-toggle').addEventListener('click', () => {
-    soundOn = !soundOn;
-    storageSet('localStorage', 'pchat-sound', soundOn ? '1' : '0');
-    updateSoundButton();
-    if (soundOn) play('message');
-  });
 
   $('#call-audio').addEventListener('click', () => startCall(false));
   $('#call-video').addEventListener('click', () => startCall(true));

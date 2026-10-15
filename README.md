@@ -11,8 +11,10 @@
 Rooms live at `https://<your-domain>/<room-id>`.
 
 1. Someone creates a room with an ID (a generated UUID, or any string), a PIN, a nickname and a mode.
-2. They send the link and, **through a different channel**, the PIN.
-3. Up to 5 people join with the PIN and chat.
+2. They invite others in one of two ways:
+   - send the room link and, **through a different channel**, the PIN;
+   - or create a **one-time invite link / QR code** that joins without a PIN.
+3. Up to 5 people chat, call and share files.
 
 ## Modes
 
@@ -31,6 +33,10 @@ A private room can be switched to logged from inside the chat (menu → **Keep h
   - Files are encrypted in the browser in 256 KiB chunks before upload.
   - Photos are resized and re-encoded, which strips EXIF data such as GPS location. They arrive with a tiny encrypted thumbnail and open full size in a viewer.
   - Other files download and decrypt on demand.
+- **One-time invites:** any member can create a link (with a QR code) that lets one person join without the PIN.
+  - It works once and expires after 5 minutes (configurable).
+  - The inviter sees live when it has been used.
+  - On mobile it can be sent through the system share sheet.
 - **Interface:** light and dark themes follow the system setting, sounds can be toggled, and the layout is built for phones: bottom-sheet menus, large touch targets, and no iOS input zoom.
 
 ## Security model
@@ -45,6 +51,8 @@ As a result, the server and its database never see room IDs, PINs, nicknames or 
 Call setup is encrypted with the same key. Offers, answers and ICE candidates are relayed as ciphertext, so the server can't swap DTLS fingerprints and can't intercept media. Media itself is DTLS-SRTP, sent peer-to-peer or through the TURN relay, which only forwards encrypted packets. TURN credentials are short-lived HMACs (coturn `use-auth-secret`) and are handed out only to clients already in a room.
 
 File chunks are bound to the room, file id, position and "last chunk" flag through the AES-GCM associated data, so the server can't reorder, truncate or swap them. The file API (`/api/files/<room-hash>/<id>`) uses the same PIN proof as joining.
+
+Invite links are `https://<domain>/i#<secret>`. The secret lives in the URL fragment, which browsers never send to the server, and the page removes it from the address bar on open. HKDF turns the secret into an AES key and a lookup id. The inviter's browser seals the room ID and PIN with that key and registers only the ciphertext under the id. Redeeming takes a `POST`, so link-preview bots that only `GET` can't use an invite up, and the server hands the ciphertext out once and then forgets it. The server never holds anything that decrypts it. As with any bearer link, whoever opens an unused invite first gets in, so send it only to the intended person.
 
 Wrong PINs are rate-limited per IP and per room. The ID and PIN strength meters warn when a value is guessable.
 
@@ -75,11 +83,12 @@ Browsers expose WebCrypto only on HTTPS or `localhost`. `http://<lan-ip>:8085` l
 ```jsonc
 {
   "privateRooms": { "maxFileMB": 10, "maxRoomFilesMB": 50, "maxTotalFilesMB": 512 }, // RAM
-  "loggedRooms":  { "maxFileMB": 100, "maxRoomFilesMB": 1024 }                       // disk
+  "loggedRooms":  { "maxFileMB": 100, "maxRoomFilesMB": 1024 },                      // disk
+  "invites":      { "ttlMinutes": 5 }                                                // one-time links
 }
 ```
 
-`maxTotalFilesMB` caps the RAM used by files across all private rooms together. The file is mounted read-only into the container. Run `docker compose restart pchat` after editing it; the limits in effect are printed at startup.
+`maxTotalFilesMB` caps the RAM used by files across all private rooms together. `ttlMinutes` is how long an unused invite link stays valid. The file is mounted read-only into the container. Run `docker compose restart pchat` after editing it; the limits in effect are printed at startup.
 
 ### Reverse proxy (example: Caddy)
 
@@ -115,6 +124,7 @@ Without these, calls still work when the browsers can reach each other directly 
   - `call.js` is the WebRTC mesh. The member with the smaller id sends every offer, so offers never collide, and camera/screen toggles are a `replaceTrack`, so they need no renegotiation.
   - `files.js` handles chunked file encryption, upload/download with progress, and image re-encoding and thumbnails.
   - `emoji.js`, `icons.js` and `sound.js` hold emoji data, inline icons and synthesized tones.
+  - `qrcode.js` is vendored [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 1.4.4 (MIT), used for invite QR codes.
 
 ## Roadmap
 

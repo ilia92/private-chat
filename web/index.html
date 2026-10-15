@@ -30,7 +30,24 @@
         This page must be opened over HTTPS (or on localhost). Browsers disable the encryption APIs on insecure pages.
       </p>
 
-      <div class="panel">
+      <div class="panel invite-panel" id="invite-card" hidden>
+        <form id="invite-form" class="form" autocomplete="off" novalidate>
+          <div class="invite-hero">
+            <span class="invite-hero-icon" data-icon="user-plus"></span>
+            <h2>You're invited</h2>
+            <p>Someone shared a one-time link to a private, encrypted chat. No PIN needed. The link works once, for a few minutes.</p>
+          </div>
+          <div class="field">
+            <label for="invite-nick">Nickname</label>
+            <input id="invite-nick" name="nick" maxlength="32" placeholder="How others will see you" />
+          </div>
+          <button type="submit" class="primary"><span class="label">Join chat</span></button>
+          <p class="error" role="alert"></p>
+          <button type="button" class="ghost" id="invite-home" hidden>Go to the start page</button>
+        </form>
+      </div>
+
+      <div class="panel" id="main-panel">
         <div class="tabs" role="tablist" data-active="create">
           <span class="tab-indicator" aria-hidden="true"></span>
           <button type="button" role="tab" data-tab="create">New chat</button>
@@ -142,17 +159,23 @@
           </div>
         </div>
         <div class="actions">
-          <button type="button" class="icon-btn call-start" id="call-audio" title="Start voice call" aria-label="Start voice call" data-icon="phone"></button>
-          <button type="button" class="icon-btn call-start" id="call-video" title="Start video call" aria-label="Start video call" data-icon="video"></button>
-          <button type="button" class="icon-btn" id="menu-btn" title="More" aria-label="Room menu" aria-haspopup="menu" aria-expanded="false" data-icon="more"></button>
-          <button type="button" class="icon-btn" id="leave" title="Leave room" aria-label="Leave room" data-icon="log-out"></button>
+          <button type="button" class="bar-btn call-start" id="call-audio" title="Start voice call" aria-label="Start voice call"><span data-icon="phone"></span><span class="bar-label">Call</span></button>
+          <button type="button" class="bar-btn call-start" id="call-video" title="Start video call" aria-label="Start video call"><span data-icon="video"></span><span class="bar-label">Video</span></button>
+          <span class="bar-sep wide-only" aria-hidden="true"></span>
+          <button type="button" class="bar-btn bar-icon wide-only live-only" data-action="copy" title="Copy room link (PIN required)" aria-label="Copy room link"><span data-icon="link"></span></button>
+          <button type="button" class="bar-btn bar-icon wide-only live-only persist-action" data-action="persist" title="Keep history: save messages and files (encrypted)" aria-label="Keep history"><span data-icon="save"></span></button>
+          <button type="button" class="bar-btn bar-icon wide-only sound-action" data-action="sound" title="Sounds on" aria-label="Toggle sounds"><span class="sound-icon" data-icon="bell"></span></button>
+          <button type="button" class="bar-btn bar-icon bar-danger wide-only live-only" data-action="destroy" title="Destroy room for everyone" aria-label="Destroy room"><span data-icon="trash"></span></button>
+          <button type="button" class="bar-btn narrow-only" id="menu-btn" title="More" aria-label="Room menu" aria-haspopup="menu" aria-expanded="false"><span data-icon="more"></span></button>
+          <button type="button" class="bar-btn bar-leave" id="leave" title="Leave room" aria-label="Leave room"><span data-icon="log-out"></span><span class="bar-label">Leave</span></button>
         </div>
         <div class="menu-backdrop" id="menu-backdrop" hidden></div>
         <div class="menu" id="room-menu" role="menu" hidden>
-          <button type="button" role="menuitem" class="live-only" id="copy-link"><span data-icon="link"></span>Copy link</button>
-          <button type="button" role="menuitem" class="live-only" id="persist-open"><span data-icon="save"></span><span>Keep history<small>Save messages &amp; files (encrypted)</small></span></button>
-          <button type="button" role="menuitem" id="sound-toggle"><span class="sound-icon" data-icon="bell"></span><span class="sound-label">Sounds on</span></button>
-          <button type="button" role="menuitem" class="danger live-only" id="destroy"><span data-icon="trash"></span>Destroy room</button>
+          <button type="button" role="menuitem" class="live-only" data-action="invite"><span data-icon="user-plus"></span><span>Invite with a one-time link<small>QR code · no PIN · single use</small></span></button>
+          <button type="button" role="menuitem" class="live-only" data-action="copy"><span data-icon="link"></span>Copy link (PIN required)</button>
+          <button type="button" role="menuitem" class="live-only persist-action" data-action="persist"><span data-icon="save"></span><span>Keep history<small>Save messages &amp; files (encrypted)</small></span></button>
+          <button type="button" role="menuitem" class="sound-action" data-action="sound"><span class="sound-icon" data-icon="bell"></span><span class="sound-label">Sounds on</span></button>
+          <button type="button" role="menuitem" class="danger live-only" data-action="destroy"><span data-icon="trash"></span>Destroy room</button>
         </div>
       </header>
 
@@ -214,6 +237,27 @@
         <div class="modal-actions">
           <button type="button" id="persist-cancel">Cancel</button>
           <button type="button" class="primary" id="persist-confirm">Keep history</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" id="invite-modal" role="dialog" aria-modal="true" aria-labelledby="invite-title" hidden>
+      <div class="modal-card invite-card">
+        <h2 id="invite-title">Invite with a one-time link</h2>
+        <p>Scan the code or send the link. Whoever opens it first joins without a PIN. It works <b>once</b>, for a few minutes.</p>
+        <div class="qr-wrap" id="invite-qr-wrap">
+          <div class="qr" id="invite-qr" aria-label="QR code of the invite link"></div>
+          <div class="qr-overlay" id="invite-overlay" hidden></div>
+        </div>
+        <div class="invite-status" id="invite-status"></div>
+        <div class="input-group">
+          <input id="invite-link" readonly aria-label="Invite link" />
+          <button type="button" class="ghost icon-only" id="invite-copy" title="Copy link" aria-label="Copy link" data-icon="copy"></button>
+          <button type="button" class="ghost icon-only" id="invite-share" title="Share" aria-label="Share link" data-icon="share" hidden></button>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="invite-new"><span data-icon="refresh"></span>New link</button>
+          <button type="button" class="primary" id="invite-close">Done</button>
         </div>
       </div>
     </div>

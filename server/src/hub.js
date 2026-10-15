@@ -15,6 +15,8 @@ export const LIMITS = {
   roomFailMax: 30,
   createsPerIpPerHour: 30,
   uploadsPerIpPer10Min: 120,
+  maxInviteLength: 2048,
+  maxInvitesPerRoom: 20,
 };
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -129,6 +131,8 @@ export class Hub {
     this.config = config;
     this.rooms = new Map();
     this.privateFileBytes = 0;
+    // Pending invite links: hash of the link secret -> encrypted room credentials.
+    this.invites = new Map();
     this.ipUploads = new Throttle(LIMITS.uploadsPerIpPer10Min, 10 * 60_000);
     this.ipFails = new Throttle(LIMITS.ipFailMax, LIMITS.failWindow);
     this.roomFails = new Throttle(LIMITS.roomFailMax, LIMITS.failWindow);
@@ -153,6 +157,8 @@ export class Hub {
         return conn.send({ t: 'ice', servers: this.iceServers() });
       case 'persist':
         return this.persist(conn, msg);
+      case 'invite':
+        return this.createInvite(conn, msg);
       case 'destroy':
         return this.destroy(conn.room, 'deleted');
       default:
@@ -318,6 +324,37 @@ export class Hub {
     });
   }
 
+  // Invite links. The link carries a secret in its #fragment, which never reaches
+  // the server. The inviter's browser uses that secret to encrypt the room ID and
+  // PIN, and registers only the ciphertext under the secret's hash. Redeeming
+  // hands the ciphertext out once and forgets it.
+  createInvite(conn, msg) {
+    if (!HEX64.test(msg.id) || !isBlob(msg.data, LIMITS.maxInviteLength)) return conn.error('bad_request');
+    if (!conn.signals.take()) return conn.error('slow_down');
+    const room = conn.room;
+    let active = 0;
+    for (const invite of this.invites.values()) if (invite.ref === room.ref) active++;
+    if (active >= LIMITS.maxInvitesPerRoom) return conn.error('too_many_invites');
+    if (this.invites.has(msg.id)) return conn.error('bad_request');
+    const expiresAt = Date.now() + this.config.invites.ttlMs;
+    this.invites.set(msg.id, { ref: room.ref, data: msg.data, expiresAt, by: conn.id });
+    conn.send({ t: 'invite-ok', id: msg.id, expiresAt });
+  }
+
+  redeemInvite(ip, id) {
+    if (!HEX64.test(id ?? '')) return { error: 'bad_request', status: 400 };
+    if (this.ipFails.blocked(ip)) return { error: 'rate_limited', status: 429 };
+    const invite = this.invites.get(id);
+    this.invites.delete(id);
+    if (!invite || invite.expiresAt < Date.now()) {
+      this.ipFails.hit(ip);
+      return { error: 'invite_gone', status: 404 };
+    }
+    const room = this.rooms.get(invite.ref);
+    if (room) this.broadcast(room, { t: 'invite-used', id, by: invite.by });
+    return { data: invite.data };
+  }
+
   // Checks an HTTP file request against the room's PIN proof. Returns the room
   // (loaded from disk for a logged room nobody is in) or an error code.
   authorizeFiles(ip, ref, auth) {
@@ -400,6 +437,7 @@ export class Hub {
     }
     room.members.clear();
     room.history.length = 0;
+    for (const [id, invite] of this.invites) if (invite.ref === room.ref) this.invites.delete(id);
   }
 
   broadcast(room, message, except) {
@@ -413,6 +451,8 @@ export class Hub {
     this.roomFails.sweep();
     this.ipCreates.sweep();
     this.ipUploads.sweep();
+    const now = Date.now();
+    for (const [id, invite] of this.invites) if (invite.expiresAt < now) this.invites.delete(id);
     for (const ref of this.store.idleRooms(Date.now())) {
       const room = this.rooms.get(ref);
       if (room) this.destroy(room, 'inactive');

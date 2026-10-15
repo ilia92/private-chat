@@ -183,5 +183,27 @@ await f2.c.send({ t: 'destroy' });
 await f2.c.next();
 check('files gone after destroy', (await get(f2.keys.ref, f2.keys.auth, id2)).status === 404);
 
+// Invite links: the server stores an opaque blob under an id and hands it out once.
+const inviteRoom = `smoke-invite-${crypto.randomUUID()}`;
+const i1 = await entry('create', inviteRoom, 'pin', 'alice', { mode: 'private' });
+const inviteIdHex = 'ab'.repeat(32);
+const sealed = await encryptJSON(i1.keys.encKey, inviteIdHex, { r: inviteRoom, p: 'pin' });
+await i1.c.send({ t: 'invite', id: inviteIdHex, data: sealed });
+const inviteOk = await i1.c.next();
+check('invite registered with expiry', inviteOk.t === 'invite-ok' && inviteOk.expiresAt > Date.now() + 60_000);
+const redeem = (id) => fetch(`${HTTP}/api/invites/${id}`, { method: 'POST' });
+check('invite cannot be fetched with GET', (await fetch(`${HTTP}/api/invites/${inviteIdHex}`)).status === 405);
+const first = await redeem(inviteIdHex);
+check('invite redeems once with the sealed blob', first.status === 200 && (await first.json()).data === sealed);
+check('second redeem refused', (await redeem(inviteIdHex)).status === 404);
+const used = await i1.c.next();
+check('room is told the invite was used', used.t === 'invite-used' && used.id === inviteIdHex && used.by === i1.reply.you);
+check('unknown invite refused', (await redeem('cd'.repeat(32))).status === 404);
+await i1.c.send({ t: 'invite', id: 'ef'.repeat(32), data: sealed });
+await i1.c.next();
+await i1.c.send({ t: 'destroy' });
+await i1.c.next();
+check('invites die with their room', (await redeem('ef'.repeat(32))).status === 404);
+
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);

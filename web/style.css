@@ -764,11 +764,90 @@ footer .icon {
 .actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
+}
+
+/* Top bar buttons: icon + label on wide screens, icon only on narrow ones. */
+.bar-btn {
+  height: 38px;
+  padding: 0 13px;
+  gap: 7px;
+  border-radius: 11px;
+  border-color: var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.bar-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.bar-btn .icon {
+  width: 17px;
+  height: 17px;
 }
 
 .call-start {
   color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.call-start:hover:not(:disabled) {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.bar-icon,
+#menu-btn {
+  width: 38px;
+  padding: 0;
+  border-color: transparent;
+}
+
+.bar-danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.bar-sep {
+  width: 1px;
+  height: 22px;
+  margin: 0 4px;
+  background: var(--border-strong);
+}
+
+/* Wide screens show room actions as icons; phones fold them into the ⋯ menu. */
+.narrow-only {
+  display: none;
+}
+
+.room.calling .bar-sep {
+  display: none;
+}
+
+.bar-leave:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+@media (max-width: 760px) {
+  .bar-label,
+  .wide-only {
+    display: none;
+  }
+
+  .narrow-only {
+    display: inline-flex;
+  }
+
+  .bar-btn {
+    width: 38px;
+    padding: 0;
+  }
 }
 
 .room.calling .call-start,
@@ -1555,6 +1634,133 @@ footer .icon {
   margin-top: 10px;
 }
 
+/* ---------- invites ---------- */
+
+.invite-panel .form {
+  padding-top: 26px;
+}
+
+.invite-hero {
+  text-align: center;
+}
+
+.invite-hero h2 {
+  margin: 12px 0 4px;
+  font-size: 22px;
+}
+
+.invite-hero p {
+  margin: 0 auto 6px;
+  max-width: 360px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.invite-hero-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  background: var(--gradient);
+  color: #fff;
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.invite-hero-icon .icon {
+  width: 26px;
+  height: 26px;
+}
+
+.invite-card .input-group input {
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.qr-wrap {
+  position: relative;
+  align-self: center;
+  width: min(240px, 70vw);
+  aspect-ratio: 1;
+  margin: 6px 0;
+}
+
+.qr {
+  width: 100%;
+  height: 100%;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.25);
+}
+
+.qr:empty {
+  background: var(--surface-2);
+  animation: pulse-bg 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes pulse-bg {
+  to {
+    opacity: 0.5;
+  }
+}
+
+.qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.qr-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  background: rgb(11 13 23 / 0.78);
+  backdrop-filter: blur(3px);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.invite-status {
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.invite-status.urgent,
+.invite-status.expired {
+  color: var(--danger);
+}
+
+.invite-status.ok {
+  color: var(--success);
+}
+
+.invite-chip {
+  gap: 5px;
+  padding: 3px 11px 3px 8px;
+  border: 1px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.invite-chip::before {
+  content: none;
+}
+
+.invite-chip .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.room.ended .invite-chip {
+  display: none;
+}
+
 /* ---------- files ---------- */
 
 .file-card {
@@ -1929,12 +2135,27 @@ footer .icon {
   }
 
   .actions {
-    gap: 0;
+    gap: 2px;
   }
 
   .icon-btn {
     width: 40px;
     height: 40px;
+  }
+
+  /* The Invite chip goes first so it never scrolls out of sight. */
+  .member-count {
+    order: -2;
+  }
+
+  .invite-chip {
+    order: -1;
+  }
+
+  .bar-btn {
+    width: 40px;
+    height: 40px;
+    border-color: transparent;
   }
 
   /* The menu becomes a bottom sheet. */

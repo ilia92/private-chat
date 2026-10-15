@@ -15,5 +15,11 @@
   "loggedRooms": {
     "maxFileMB": 100,
     "maxRoomFilesMB": 1024
+  },
+
+  // Invite links: open once to join without typing the PIN.
+  "invites": {
+    // Minutes before an unused invite link stops working.
+    "ttlMinutes": 5
   }
 }
